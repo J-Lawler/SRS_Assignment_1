@@ -11,9 +11,9 @@ sigma_true <- 0.2
 beta_true <- 0.05
 g_1 <- 1
 
-n <- 6000
-eta <- rnorm(6000)
-epsilon <- rnorm(6000)
+n <- 1000
+eta <- rnorm(n)
+epsilon <- rnorm(n)
 
 # state process
 g_values <- numeric(n)
@@ -67,6 +67,7 @@ loglikelihood.SV0 <- function(parameters, y, m, gmax){
   # Scale the rows of Γ so that they each sum to 1.
   Gamma <-  Gamma/apply(Gamma,1,sum)
   # Compute δ(=δΓ), the stationary distribution of the Markov chain {ht}.
+  # This will be our initial distribution
   foo <-  solve(t(diag(m)-Gamma+1),rep(1,m)) 
   
   llk <-  0
@@ -79,11 +80,25 @@ loglikelihood.SV0 <- function(parameters, y, m, gmax){
   # Return negative log likelihood since optim() minimises
   return(-llk)}
 
+start_time_HMM <- Sys.time()
 
+# minimise likelihood
 HMM_estimates <- nlm(loglikelihood.SV0, c(0.9,log(0.3),log(0.2)),
             y=y_values,  m = m, gmax = gmax)
 
+end_time_HMM <- Sys.time()
 
+end_time_HMM - start_time_HMM
+
+
+# phi
+HMM_estimates$estimate[1]
+
+# sigma
+exp(HMM_estimates$estimate[2])
+
+# beta
+exp(HMM_estimates$estimate[3])
 
 
 ###### Estimate with HMC & Stan ######
@@ -98,34 +113,44 @@ library(rstan)
 
 stan_code <- 
   "data{
-    vector[6000] y_values;
+    vector[1000] y_values;
 }
 parameters{
     real phi;
     real<lower=0> sigma; 
     real<lower=0> beta;
-    vector[6000] g;
+    vector[1000] g;
 }
 model{
     phi ~ uniform(-1, 1); // prior for phi
     sigma ~ cauchy(0, 5); // prior for sigma
     beta ~ cauchy(0, 5); // prior for beta
     g[1] ~ normal(0, sigma / sqrt(1 - phi * phi)); // prior for initial value
-    for (t in 2:6000) {
+    for (t in 2:1000) {
     g[t] ~ normal(phi *g[t - 1], sigma);
     }
-    for (t in 1:6000) {
+    for (t in 1:1000) {
     y_values[t] ~ normal(0, beta*exp(g[t] / 2));
     }
 }"
 
+start_time_sample <- Sys.time()
+
 # stan_model compiles the model - the data is not used and no samples are drawn
-stan_sv0 <- stan_model(model_name = "stan_sv0",model_code=stan_code)%>% 
-  # compose_data is a tidybayes function
-  # sampling draws samples from the posterior
-  sampling(data = compose_data(y_values), chains=4, cores=parallel::detectCores())%>% 
-  # tidybayes function useful when we have more complex indexing than this model
-  recover_types() 
+stan_sv0 <- stan_model(model_name = "stan_sv0",model_code=stan_code)
+
+# compose_data is a tidybayes function
+# sampling draws samples from the posterior
+model_samples <-   sampling(stan_sv0, data = compose_data(y_values), chains=2)
+
+# saveRDS(stan_sv0,file="stan_sv0.rds")
+# stan_sv0 <- readRDS(file="stan_sv0.rds")
+
+# The output is now a stanfit object that contains the draws from the posterior
+
+end_time_sample <- Sys.time()
+
+end_time_sample - start_time_sample
 
 # saveRDS(stan_sv0,file="stan_sv0.rds")
 # stan_sv0 <- readRDS(file="stan_sv0.rds")
@@ -134,18 +159,12 @@ stan_sv0 <- stan_model(model_name = "stan_sv0",model_code=stan_code)%>%
 
 
 # Extracting Draws
-stan_draws <- stan_sv0 %>% 
+stan_draws <- model_samples %>% 
   spread_draws(phi, sigma, beta)
 
 mean(stan_draws$phi)
 mean(stan_draws$sigma)
 mean(stan_draws$beta)
-
-
-
-
-
-
 
 
 
